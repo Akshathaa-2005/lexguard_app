@@ -297,8 +297,15 @@ mongo_db = None
 def init_mongo():
     global mongo_db
     try:
+        # Support both historical and documented env var names.
+        mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
+        if not mongo_uri:
+            raise RuntimeError(
+                "Mongo URI is not configured. Set MONGO_URI or MONGODB_URI."
+            )
+
         client = MongoClient(
-            os.getenv("MONGO_URI"),
+            mongo_uri,
             serverSelectionTimeoutMS=5000,
         )
         client.admin.command("ping")
@@ -725,5 +732,6 @@ def not_found(e):
 if __name__ == "__main__":
     init_mongo()
     port = int(os.environ.get("PORT", 5000))
+    debug_mode = os.getenv("FLASK_DEBUG", "false").strip().lower() == "true"
     logger.info(f"Starting Legal RAG API on :{port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)
