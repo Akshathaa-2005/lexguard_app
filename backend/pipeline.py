@@ -8,7 +8,7 @@ load_dotenv()
 
 from embeddings import EmbeddingModel
 from db import Database
-from retriever import Retriever
+from retriever import Retriever, ApiRetriever
 from judge import LLMJudge
 from report_generator import ReportGenerator
 
@@ -35,13 +35,27 @@ class LegalRAGPipeline:
 
         judge_model    = os.getenv("GROQ_JUDGE_MODEL",  "llama-3.1-8b-instant")
         analysis_model = os.getenv("GROQ_KIWI_MODEL",   "llama-3.3-70b-versatile")
+        rag_mode       = os.getenv("RAG_MODE", "local").strip().lower()
 
         # Instantiate modules
-        self.embedder   = EmbeddingModel()
-        self.db         = Database()
-        self.retriever  = Retriever(self.db, self.embedder)
-        self.judge      = LLMJudge(groq_client, judge_model)
-        self.reporter   = ReportGenerator(groq_client, analysis_model)
+        self.db        = Database()
+        self.judge     = LLMJudge(groq_client, judge_model)
+        self.reporter  = ReportGenerator(groq_client, analysis_model)
+
+        if rag_mode == "api":
+            logger.info("Using API-based retrieval mode for RAG")
+            self.retriever = ApiRetriever(self.db)
+        else:
+            try:
+                self.embedder = EmbeddingModel()
+                self.retriever = Retriever(self.db, self.embedder)
+            except Exception as e:
+                logger.warning(
+                    "Local embeddings unavailable; falling back to API-based retrieval. "
+                    "Set RAG_MODE=local once torch/transformers are installed."
+                )
+                self.embedder = None
+                self.retriever = ApiRetriever(self.db)
 
         logger.info("RAG Pipeline initialized")
 

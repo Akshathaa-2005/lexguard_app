@@ -130,6 +130,110 @@ class Database:
 
         return results
 
+    def text_search(
+        self,
+        query: str,
+        country: str = "",
+        limit: int = 50,
+    ) -> List[Dict]:
+        """Fallback text-based retrieval for API-mode RAG."""
+        if not self.is_connected():
+            logger.error("PostgreSQL unavailable")
+            return []
+
+        query = query.strip()
+        if not query:
+            return []
+
+        search_pattern = f"%{query}%"
+        results = self._run_text_search(search_pattern, country, limit)
+
+        if not results and country:
+            logger.warning(f"No text search results for country='{country}', retrying without country filter")
+            results = self._run_text_search(search_pattern, "", limit)
+
+        return results
+
+    def _run_text_search(
+        self,
+        search_pattern: str,
+        country: str,
+        limit: int,
+    ) -> List[Dict]:
+        try:
+            if country:
+                sql = """
+                    SELECT
+                        c.chunk_text,
+                        c.document_id,
+                        c.section_id,
+                        s.section_title,
+                        d.country,
+                        d.publish_date,
+                        CASE
+                            WHEN c.chunk_text ILIKE %s THEN 0.95
+                            WHEN s.section_title ILIKE %s THEN 0.9
+                            ELSE 0.8
+                        END AS similarity_score
+                    FROM legal_chunks c
+                    LEFT JOIN legal_sections s
+                        ON c.section_id = s.section_id
+                    LEFT JOIN legal_documents d
+                        ON c.document_id = d.document_id
+                    WHERE d.country = %s
+                      AND (c.chunk_text ILIKE %s OR s.section_title ILIKE %s)
+                    ORDER BY similarity_score DESC
+                    LIMIT %s
+                """
+                self.cursor.execute(sql, (search_pattern, search_pattern, country, search_pattern, search_pattern, limit))
+            else:
+                sql = """
+                    SELECT
+                        c.chunk_text,
+                        c.document_id,
+                        c.section_id,
+                        s.section_title,
+                        d.country,
+                        d.publish_date,
+                        CASE
+                            WHEN c.chunk_text ILIKE %s THEN 0.95
+                            WHEN s.section_title ILIKE %s THEN 0.9
+                            ELSE 0.8
+                        END AS similarity_score
+                    FROM legal_chunks c
+                    LEFT JOIN legal_sections s
+                        ON c.section_id = s.section_id
+                    LEFT JOIN legal_documents d
+                        ON c.document_id = d.document_id
+                    WHERE c.chunk_text ILIKE %s OR s.section_title ILIKE %s
+                    ORDER BY similarity_score DESC
+                    LIMIT %s
+                """
+                self.cursor.execute(sql, (search_pattern, search_pattern, search_pattern, search_pattern, limit))
+
+            rows = self.cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Text search query failed: {e}")
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            return []
+
+        results = []
+        for row in rows:
+            chunk_text, doc_id, section_id, section_title, country_val, publish_date, similarity_score = row
+            results.append({
+                "chunk_text":      chunk_text,
+                "document_id":     doc_id,
+                "section_id":      section_id,
+                "section_title":   section_title or "Unknown Section",
+                "country":         country_val or "Unknown",
+                "publish_date":    str(publish_date) if publish_date else "Unknown",
+                "similarity_score": float(similarity_score or 0.0),
+            })
+        return results
+
     def close(self):
         if self.cursor:
             self.cursor.close()
